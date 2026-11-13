@@ -1,4 +1,6 @@
 """Ask an LLM to answer ONLY from the excerpts. Providers: gemini | ollama | none."""
+import asyncio
+from http import client
 import os
 import re
 import httpx
@@ -27,26 +29,29 @@ def build_prompt(question: str, hits: list[dict]) -> str:
 
 
 async def ask_llm(question: str, hits: list[dict]) -> str | None:
-    if PROVIDER == "none":
-        return None
-    prompt = build_prompt(question, hits)
-    async with httpx.AsyncClient(timeout=120) as client:
-        if PROVIDER == "gemini":
-            r = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-                headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
-                json={"systemInstruction": {"parts": [{"text": SYSTEM}]},
-                      "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                      "generationConfig": {"temperature": 0}})
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        if PROVIDER == "ollama":
-            r = await client.post(f"{OLLAMA_URL}/api/chat", json={
-                "model": OLLAMA_MODEL, "stream": False, "options": {"temperature": 0},
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]})
-            r.raise_for_status()
-            return r.json()["message"]["content"].strip()
-    return None
+            if PROVIDER == "gemini":
+                payload = {"systemInstruction": {"parts": [{"text": SYSTEM}]},
+                       "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                       "generationConfig": {"temperature": 0}}
+                models = [GEMINI_MODEL] + [m for m in os.getenv("GEMINI_FALLBACK_MODELS", "").split(",") if m.strip()]
+                last = None
+                for model in models:
+                    for attempt in range(3):
+                        try:
+                            r = await client.post(
+                                f"https://generativelanguage.googleapis.com/v1beta/models/{model.strip()}:generateContent",
+                                headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, json=payload)
+                            if r.status_code in (429, 500, 503):
+                                last = r
+                                await asyncio.sleep(1.5 * (attempt + 1))
+                                continue
+                            r.raise_for_status()
+                            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        except httpx.ReadTimeout:
+                            await asyncio.sleep(1)
+                if last is not None:
+                    last.raise_for_status()
+                raise RuntimeError("Gemini did not respond")
 
 
 def parse(answer: str, n_hits: int):
