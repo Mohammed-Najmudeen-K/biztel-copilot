@@ -17,8 +17,8 @@ Rules:
 - If the excerpts do not contain the answer, reply with exactly: NOT_FOUND
 - If excerpts disagree, trust the one marked LATEST and say so.
 - Be exact about who does what. Never merge or swap roles, titles or numbers.
+- Don't write the words LATEST or OLD in your answer. Cite as "Doc number, Rev N".
 - End with one line: SOURCES: followed by the excerpt numbers you used, e.g. SOURCES: 1,3"""
-
 
 def build_prompt(question: str, hits: list[dict]) -> str:
     ex = "\n\n".join(
